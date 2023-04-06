@@ -1,8 +1,8 @@
 """Convience functions for reductions."""
 
+from typing import List
 import bottleneck as bn
 import numpy as np
-from typing import List
 from astropy.modeling import models
 from astropy.nddata import CCDData
 import ccdproc
