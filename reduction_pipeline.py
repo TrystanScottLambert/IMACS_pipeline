@@ -95,11 +95,12 @@ class Objects(ExpType):
             reduced = ccdp.flat_correct(reduced, master_flat)
             reduced.write(self.calibrated_data / ('science-'+file_name))
 
-def reduce_images(bias_directory: str, flat_directory: str, science_directory: str) -> None:
+def reduce_images(bias_directory: str, flat_directory: str, science_directory: str,
+                   reduction_directory: str) -> None:
     """Performs basic reduction on all the science images."""
-    biases = Biases(bias_directory, 'reduced')
-    flats = Flats(flat_directory, 'reduced')
-    objects = Objects(science_directory, 'reduced')
+    biases = Biases(bias_directory, reduction_directory)
+    flats = Flats(flat_directory, reduction_directory)
+    objects = Objects(science_directory, reduction_directory)
 
     master_bias = biases.make_master_bias()
     master_flat = flats.make_master_flat()
@@ -110,5 +111,6 @@ if __name__ == '__main__':
     BIAS_DIRECTORY = 'BIAS'
     FLAT_DIRECTORY = 'FLAT'
     SCIENCE_DIRECTORY = 'SCIENCE'
+    REDUCTION_DIRECTORY = 'REDUCED'
 
-    reduce_images(BIAS_DIRECTORY, FLAT_DIRECTORY, SCIENCE_DIRECTORY)
+    reduce_images(BIAS_DIRECTORY, FLAT_DIRECTORY, SCIENCE_DIRECTORY, REDUCTION_DIRECTORY)
