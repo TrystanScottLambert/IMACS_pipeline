@@ -6,114 +6,109 @@ from pathlib import Path
 import ccdproc as ccdp
 from astropy.nddata import CCDData
 from astropy.stats import mad_std
-from astropy import units as u
 import numpy as np
 
-BIAS_DIRECTORY = 'BIAS'
-FLAT_DIRECTORY = 'FLAT'
-SCIENCE_DIRECTORY = 'SCIENCE'
+
+def inv_median(val):
+    """Inverted median for scaling flats."""
+    return 1 / np.median(val)
+
+def get_trim_index(ccd_object: CCDData) -> int:
+    """Determines the index needed for trimming by reading the biassec in the header."""
+    idx =  int(ccd_object.header['biassec'].split('[')[-1].split(':')[0]) -1
+    return idx
 
 
-# BIAS #
-calibrated_data = Path('.', 'example-reduced')
-calibrated_data.mkdir(exist_ok=True)
+class ExpType:
+    """Exposure types."""
+    def __init__(self, input_directory: str, output_directory: str):
+        """Directory of the exposure type. Use 'SCIENCE' and not 'SCIENCE/'."""
+        self.path = Path(input_directory)
+        self.files = ccdp.ImageFileCollection(self.path)
+        self.calibrated_data = Path(output_directory)
+        self.calibrated_data.mkdir(exist_ok=True)
 
-bias_path = Path(BIAS_DIRECTORY)
-bias_files = ccdp.ImageFileCollection(bias_path)
+    def _subtract_overscan(self, ccd_object: CCDData, outfile: str) -> CCDData:
+        """Subtracts and trims the overscan."""
+        ccd = ccdp.subtract_overscan(
+            ccd_object, overscan=ccd_object[:, get_trim_index(ccd_object):])
+        ccd = ccdp.trim_image(ccd[:, :get_trim_index(ccd_object)])
+        ccd.write(self.calibrated_data / outfile)
 
-# remove the overscan region and trim.
-for ccd, file_name in bias_files.ccds(EXPTYPE='Bias',            # Just get the bias frames
-                                 ccd_kwargs={'unit': 'adu'}, # CCDData requires a unit for the image if 
-                                                             # it is not in the header
-                                 return_fname=True           # Provide the file name too.
-                                ):
-        # Subtract the overscan
-    ccd = ccdp.subtract_overscan(ccd, overscan=ccd[:, 1034:], median=True)
-    
-    # Trim the overscan
-    ccd = ccdp.trim_image(ccd[:, :1024])
-    
-    # Save the result
-    ccd.write(calibrated_data / ('bias-' + file_name))
 
-# create the master bias.
+class Biases(ExpType):
+    """Bias Class"""
 
-reduced_biases = ccdp.ImageFileCollection(calibrated_data)
+    def make_master_bias(self) -> CCDData:
+        """Makes the master bias."""
+        for ccd, file_name in self.files.ccds(
+            EXPTYPE='Bias', ccd_kwargs={'unit': 'adu'}, return_fname=True):
+            self._subtract_overscan(ccd, 'bias-' + file_name)
 
-calibrated_biases = reduced_biases.files_filtered(EXPTYPE='Bias', include_path=True)
-
-combined_bias = ccdp.combine(calibrated_biases,
+        reduced_biases = ccdp.ImageFileCollection(self.calibrated_data)
+        calibrated_biases = reduced_biases.files_filtered(EXPTYPE='Bias', include_path=True)
+        combined_bias = ccdp.combine(calibrated_biases,
                              method='average',
                              sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5,
                              sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std,
                              mem_limit=350e6
                             )
+        combined_bias.meta['combined'] = True
+        combined_bias.write(self.calibrated_data / 'master_bias.fits')
+        return combined_bias
 
-combined_bias.meta['combined'] = True
 
-combined_bias.write(calibrated_data / 'combined_bias.fits')
+class Flats(ExpType):
+    """Flat class"""
 
-############################################################
+    def make_master_flat(self) -> CCDData:
+        """Creates the master flat."""
+        for ccd, file_name in self.files.ccds(
+            EXPTYPE='Flat', ccd_kwargs={'unit': 'adu'}, return_fname=True):
+            self._subtract_overscan(ccd, 'flat-' + file_name)
 
-# Flat 
-
-# Remove the overscan and trim
-
-flat_raw = Path(FLAT_DIRECTORY)
-ifc_raw = ccdp.ImageFileCollection(flat_raw)
-
-for ccd, file_name in ifc_raw.ccds(EXPTYPE='Flat',            # Just get the bias frames
-                                         ccd_kwargs={'unit': 'adu'}, # CCDData requires a unit for the image if 
-                                                                     # it is not in the header
-                                         return_fname=True           # Provide the file name too.
-                                        ):    
-    # Subtract the overscan
-    ccd = ccdp.subtract_overscan(ccd, overscan=ccd[:, 1034:], median=True)
-    
-    # Trim the overscan
-    ccd = ccdp.trim_image(ccd[:, :1024])
-
-    # Save the result; there are some duplicate file names so pre-pend "flat"
-    ccd.write(calibrated_data / ('flat-' + file_name))
-
-# create the master Flat.
-
-def inv_median(a):
-    return 1 / np.median(a)
-reduced_images = ccdp.ImageFileCollection(calibrated_data)
-
-calibrated_flats = reduced_images.files_filtered(EXPTYPE='Flat', include_path=True)
-
-combined_flats = ccdp.combine(calibrated_flats,
+        reduced_images = ccdp.ImageFileCollection(self.calibrated_data)
+        calibrated_flats = reduced_images.files_filtered(EXPTYPE='Flat', include_path=True)
+        combined_flats = ccdp.combine(calibrated_flats,
                              method='average', scale=inv_median,
                              sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5,
                              sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std,
                              mem_limit=350e6
                             )
 
-combined_flats.meta['combined'] = True
+        combined_flats.meta['combined'] = True
+        combined_flats.write(self.calibrated_data / 'master_flat.fits')
+        return combined_flats
 
-combined_flats.write(calibrated_data / 'combined_flat.fits')
 
-####################################################################
+class Objects(ExpType):
+    """Science expsoures."""
+    def reduce_science_images(self, master_bias:CCDData, master_flat: CCDData) -> None:
+        """Reduces each individual science image in the directory."""
+        for ccd, file_name in self.files.ccds(
+            ExpType='Object', return_fname=True, ccd_kwargs=dict(unit='adu')):
 
-# Science image reduction
+            reduced = ccdp.subtract_overscan(
+                ccd, overscan=ccd[:, get_trim_index(ccd):], median=True)
+            reduced = ccdp.trim_image(reduced[:, :get_trim_index(ccd)])
+            reduced = ccdp.subtract_bias(reduced, master_bias)
+            reduced = ccdp.flat_correct(reduced, master_flat)
+            reduced.write(self.calibrated_data / ('science-'+file_name))
 
-science_raw = ccdp.ImageFileCollection(SCIENCE_DIRECTORY)
+def reduce_images(bias_directory: str, flat_directory: str, science_directory: str) -> None:
+    """Performs basic reduction on all the science images."""
+    biases = Biases(bias_directory, 'reduced')
+    flats = Flats(flat_directory, 'reduced')
+    objects = Objects(science_directory, 'reduced')
 
-# These two lists are created so that we have copies of the raw and calibrated images
-# to later in the notebook. They are not ordinarily required.
-all_reds = []
-science_ccds = []
-for light, file_name in science_raw.ccds(EXPTYPE='Object', return_fname=True, ccd_kwargs=dict(unit='adu')):
-    science_ccds.append(light)
-    
-    reduced = ccdp.subtract_overscan(light, overscan=light[:, 1034:], median=True)
-    reduced = ccdp.trim_image(reduced[:, :1024])
+    master_bias = biases.make_master_bias()
+    master_flat = flats.make_master_flat()
+    objects.reduce_science_images(master_bias, master_flat)
 
-    reduced = ccdp.subtract_bias(reduced, combined_bias)
 
-    reduced = ccdp.flat_correct(reduced, combined_flats)
-    all_reds.append(reduced)
+if __name__ == '__main__':
+    BIAS_DIRECTORY = 'BIAS'
+    FLAT_DIRECTORY = 'FLAT'
+    SCIENCE_DIRECTORY = 'SCIENCE'
 
-    reduced.write(calibrated_data / ('science-' + file_name))
+    reduce_images(BIAS_DIRECTORY, FLAT_DIRECTORY, SCIENCE_DIRECTORY)
