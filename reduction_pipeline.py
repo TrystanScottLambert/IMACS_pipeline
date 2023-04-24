@@ -15,8 +15,9 @@ def inv_median(val):
 
 def get_trim_index(ccd_object: CCDData) -> int:
     """Determines the index needed for trimming by reading the biassec in the header."""
-    idx =  int(ccd_object.header['biassec'].split('[')[-1].split(':')[0]) -1
-    return idx
+    idx_x = int(ccd_object.header['biassec'].split('[')[-1].split(':')[0]) -1
+    idx_y = int(ccd_object.header['biassec'].split(']')[0].split(':')[-1]) -1
+    return idx_x, idx_y
 
 
 class ExpType:
@@ -30,9 +31,10 @@ class ExpType:
 
     def _subtract_overscan(self, ccd_object: CCDData, outfile: str) -> CCDData:
         """Subtracts and trims the overscan."""
+        trim_x, trim_y = get_trim_index(ccd_object)
         ccd = ccdp.subtract_overscan(
-            ccd_object, overscan=ccd_object[:, get_trim_index(ccd_object):])
-        ccd = ccdp.trim_image(ccd[:, :get_trim_index(ccd_object)])
+            ccd_object, overscan=ccd_object[:, trim_x:])
+        ccd = ccdp.trim_image(ccd[:trim_y, :trim_x])
         ccd.write(self.calibrated_data / outfile)
 
 
@@ -88,9 +90,10 @@ class Objects(ExpType):
         for ccd, file_name in self.files.ccds(
             ExpType='Object', return_fname=True, ccd_kwargs=dict(unit='adu')):
 
+            x_trim, y_trim = get_trim_index(ccd)
             reduced = ccdp.subtract_overscan(
-                ccd, overscan=ccd[:, get_trim_index(ccd):], median=True)
-            reduced = ccdp.trim_image(reduced[:, :get_trim_index(ccd)])
+                ccd, overscan=ccd[:, x_trim:], median=True)
+            reduced = ccdp.trim_image(reduced[:y_trim, :x_trim])
             reduced = ccdp.subtract_bias(reduced, master_bias)
             reduced = ccdp.flat_correct(reduced, master_flat)
             reduced.write(self.calibrated_data / ('science-'+file_name))
@@ -110,7 +113,12 @@ def reduce_images(bias_directory: str, flat_directory: str, science_directory: s
 if __name__ == '__main__':
     BIAS_DIRECTORY = 'BIAS'
     FLAT_DIRECTORY = 'FLAT'
-    SCIENCE_DIRECTORY = 'SCIENCE'
+    SCIENCE_DIRECTORY = 'RAW_SCIENCE'
     REDUCTION_DIRECTORY = 'REDUCED'
+    DATA_PATH = '/home/tlambert/Downloads/g_band/'
 
-    reduce_images(BIAS_DIRECTORY, FLAT_DIRECTORY, SCIENCE_DIRECTORY, REDUCTION_DIRECTORY)
+    reduce_images(
+        DATA_PATH + BIAS_DIRECTORY,
+        DATA_PATH + FLAT_DIRECTORY,
+        DATA_PATH + SCIENCE_DIRECTORY,
+        DATA_PATH + REDUCTION_DIRECTORY)
