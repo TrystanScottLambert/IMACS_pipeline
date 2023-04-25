@@ -55,7 +55,7 @@ class Biases(ExpType):
                              sigma_clip_func=np.ma.median, sigma_clip_dev_func=mad_std,
                              mem_limit=350e6
                             )
-        combined_bias.meta['combined'] = True
+        #combined_bias.meta['combined'] = True
         combined_bias.write(self.calibrated_data / 'master_bias.fits')
         return combined_bias
 
@@ -78,7 +78,7 @@ class Flats(ExpType):
                              mem_limit=350e6
                             )
 
-        combined_flats.meta['combined'] = True
+        #combined_flats.meta['combined'] = True
         combined_flats.write(self.calibrated_data / 'master_flat.fits')
         return combined_flats
 
